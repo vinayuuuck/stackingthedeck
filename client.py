@@ -3,56 +3,221 @@ import argparse
 import json
 import random
 import socket
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple, Optional
 
-# -------- Replace these three functions with your own strategy ----------
+
+from collections import Counter
+
+NODE_LIMIT = 500000
+
+
+def simulate_full(sequence: List[int], start: int) -> str:
+    n = len(sequence)
+    p = -1
+    m = start
+    while True:
+        rem = n - (p + 1)
+        if m > rem:
+            return "Chooser"
+        p = p + m
+        m = sequence[p]
+        if p == n - 1 and sequence[p] == 1:
+            return "Arranger"
+
+
+def simulate_partial_prefix(prefix: List[int], start: int, total_len: int) -> str:
+    n = total_len
+    p = -1
+    m = start
+    while True:
+        rem = n - (p + 1)
+        if m > rem:
+            return "Chooser"
+        p = p + m
+        if p < len(prefix):
+            m = prefix[p]
+            if p == n - 1:
+                if prefix[p] == 1:
+                    return "Arranger"
+                else:
+                    return "ArrangerFail"
+            continue
+        else:
+            return "Undecided"
+
+
+def arranger_oracle(
+    S_prime: List[int], V: List[int], node_limit: int = NODE_LIMIT
+) -> Optional[List[int]]:
+    n = 16
+    total_len = len(S_prime) + len(V)
+    if total_len != n:
+        return None
+    bag_counter = Counter(V)
+    if bag_counter[1] == 0 and S_prime and S_prime[-1] != 1:
+        return None
+    if bag_counter[1] > 0:
+        bag_counter[1] -= 1
+        if bag_counter[1] == 0:
+            del bag_counter[1]
+        reserve_one = True
+    else:
+        reserve_one = False
+    stack = []
+    start_state = (0, tuple(sorted(bag_counter.elements())), [])
+    stack.append(start_state)
+    seen: Dict[Tuple[int, Tuple[int, ...], int], bool] = {}
+    nodes = 0
+    while stack:
+        if nodes > node_limit:
+            break
+        nodes += 1
+        idx_s, vtuple, prefix = stack.pop()
+        vbag = list(vtuple)
+        key = (idx_s, vtuple, len(prefix))
+        if key in seen:
+            continue
+        seen[key] = True
+        prune = False
+        for s in range(1, 9):
+            status = simulate_partial_prefix(prefix, s, n)
+            if status == "Chooser" or status == "ArrangerFail":
+                prune = True
+                break
+        if prune:
+            continue
+        if len(prefix) == n - 1:
+            last_candidates = []
+            if idx_s < len(S_prime):
+                if S_prime[idx_s] == 1:
+                    last_candidates.append(1)
+            for v in vbag:
+                if v == 1:
+                    last_candidates.append(1)
+                    break
+            if not last_candidates:
+                continue
+            final_seq = prefix + [1]
+            ok = True
+            for s in range(1, 9):
+                if simulate_full(final_seq, s) != "Arranger":
+                    ok = False
+                    break
+            if ok:
+                return final_seq
+            else:
+                continue
+        if idx_s < len(S_prime):
+            next_val = S_prime[idx_s]
+            new_prefix = prefix + [next_val]
+            stack.append((idx_s + 1, vtuple, new_prefix))
+        if vbag:
+            seen_values = set()
+            for i, val in enumerate(vbag):
+                if val in seen_values:
+                    continue
+                seen_values.add(val)
+                new_v = vbag[:i] + vbag[i + 1 :]
+                new_vtuple = tuple(sorted(new_v))
+                new_prefix = prefix + [val]
+                stack.append((idx_s, new_vtuple, new_prefix))
+    return None
+
+
+def unique_permutations_multiset(items: List[int]):
+    counts = Counter(items)
+    keys = sorted(counts.keys())
+
+    def gen(prefix, counts_left, length):
+        if len(prefix) == length:
+            yield list(prefix)
+            return
+        for k in keys:
+            if counts_left.get(k, 0) > 0:
+                counts_left[k] -= 1
+                prefix.append(k)
+                yield from gen(prefix, counts_left, length)
+                prefix.pop()
+                counts_left[k] += 1
+
+    yield from gen([], dict(counts), len(items))
 
 
 def arrange_S(S_pool: List[int]) -> List[int]:
-    """Return an ordering S' of the multiset S_pool. Placeholder: random permutation."""
-    Sprime = S_pool[:]
-    random.shuffle(Sprime)
-    return Sprime
+    pool = S_pool[:]
+    if not pool:
+        return []
+    if len(pool) <= 8:
+        for perm in unique_permutations_multiset(pool):
+            oracle = arranger_oracle(perm, [])
+            if oracle is None:
+                return perm
+        return sorted(pool, reverse=True)
+    best_candidate = None
+    for perm in unique_permutations_multiset(pool):
+        possible = True
+        hypothetical_V = [1]
+        oracle = arranger_oracle(perm, hypothetical_V)
+        if oracle is None:
+            return perm
+        if best_candidate is None:
+            best_candidate = perm
+    if best_candidate is not None:
+        return best_candidate
+    return sorted(pool, reverse=True)
 
 
 def insert_V(S_prime: List[int], V: List[int]) -> List[int]:
-    """Return a full sequence (len=16) that is a permutation of S' union V, preserves S' order, ends with 1. Placeholder random interleave."""
-    seq = S_prime[:]
+    seq = arranger_oracle(S_prime, V)
+    if seq is not None:
+        return seq
+    n = 16
+    seq_out: List[int] = []
+    seq_out.extend(S_prime)
     bag = V[:]
-
-    # Ensure a 1 at the end; reserve from V if possible
-    reserve_one = None
     if 1 in bag:
         bag.remove(1)
-        reserve_one = 1
-
-    out: List[int] = []
-    for x in seq:
-        n_insert = 0 if not bag else random.randint(0, min(2, len(bag)))
-        for _ in range(n_insert):
-            out.append(bag.pop(random.randrange(len(bag))))
-        out.append(x)
-    # append leftovers
-    random.shuffle(bag)
-    out.extend(bag)
-
-    if reserve_one is not None:
-        out.append(1)
-    else:
-        # move a 1 to end if any, else force (should not happen under spec)
-        if 1 in out:
-            out.remove(1)
-        out.append(1)
-
-    return out[:16]
+        bag.append(1)
+    while len(seq_out) < n:
+        if bag:
+            seq_out.append(bag.pop(0))
+        else:
+            seq_out.append(1)
+    if seq_out[-1] != 1:
+        for i in range(len(seq_out) - 1):
+            if seq_out[i] == 1:
+                seq_out[i], seq_out[-1] = seq_out[-1], seq_out[i]
+                break
+        else:
+            seq_out[-1] = 1
+    return seq_out[:n]
 
 
 def choose_start(sequence: List[int]) -> int:
-    """Return starting number between 1 and 8 inclusive. Placeholder: random choice."""
-    return random.randint(1, 8)
-
-
-# -------- Networking helpers ----------
+    for s in range(1, 9):
+        if simulate_full(sequence, s) == "Chooser":
+            return s
+    best = 1
+    best_revealed = -1
+    n = len(sequence)
+    for s in range(1, 9):
+        p = -1
+        m = s
+        revealed = 0
+        while True:
+            rem = n - (p + 1)
+            if m > rem:
+                break
+            p = p + m
+            revealed += 1
+            m = sequence[p]
+            if p == n - 1 and sequence[p] == 1:
+                revealed = -1
+                break
+        if revealed > best_revealed:
+            best_revealed = revealed
+            best = s
+    return best
 
 
 def send_msg(sock: socket.socket, obj: Dict[str, Any]) -> None:
